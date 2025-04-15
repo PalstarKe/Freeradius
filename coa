@@ -1,0 +1,38 @@
+###########################################################################
+#  Sample virtual server for receiving a CoA or Disconnect-Request packet.#
+###########################################################################
+
+listen {
+	type = coa
+	ipaddr = *
+	port = 3799
+	virtual_server = coa
+}
+
+server coa {
+	recv-coa {
+		suffix
+		ok
+	}
+	recv CoA-Request {
+                ok
+        }
+	send-coa {
+		ok
+	}
+        send CoA-ACK {
+                ok
+        }
+        send CoA-NAK {
+                ok
+        }
+        recv Disconnect-Request {
+                ok
+        }
+        send Disconnect-ACK {
+                ok
+        }
+        send Disconnect-NAK {
+                ok
+        }
+}

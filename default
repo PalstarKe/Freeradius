@@ -1,0 +1,283 @@
+######################################################################
+server default {
+
+	listen {
+		type = auth
+		ipaddr = *
+		port = 0
+		limit {
+			max_connections = 16
+			lifetime = 0
+			idle_timeout = 30
+		}
+	}
+
+	listen {
+		ipaddr = *
+		port = 0
+		type = acct
+		limit {
+			# max_pps = 0
+			# idle_timeout = 0
+			# lifetime = 0
+			# max_connections = 0
+		}
+	}
+
+	listen {
+		type = auth
+		ipv6addr = ::
+		port = 0
+		limit {
+			max_connections = 0
+			lifetime = 0
+			idle_timeout = 0
+		}
+	}
+
+	listen {
+		ipv6addr = ::
+		port = 0
+		type = acct
+
+		limit {
+			# max_pps = 0
+			# idle_timeout = 0
+			# lifetime = 0
+			# max_connections = 0
+		}
+	}
+
+	authorize {
+		preprocess
+		auth_log
+		chap
+		mschap
+		digest
+		suffix
+		eap {
+			ok = return
+		}
+		sql
+		if ("%{sql:UPDATE radacct set acctstoptime=ADDDATE(acctstarttime, INTERVAL acctsessiontime SECOND), acctterminatecause='Clear Stale Session' WHERE username='%{User-Name}' AND callingstationid='%{Calling-Station-Id}' AND acctstoptime is NULL}") {
+			# Reply with a message to indicate the stale session has been cleared.
+			update reply {
+				Reply-Message := "Disconnect Duplicate User & Clear Stale Session"
+			}
+
+			# Disconnect the user if they have the same username & MAC online.
+			update disconnect {
+				User-Name = "%{request:User-Name}"
+				Calling-Station-Id = "%{Calling-Station-Id}"
+				Framed-IP-Address = "%{Framed-IP-Address}"
+			}
+		}
+
+		logintime
+		pap
+
+		Autz-Type New-TLS-Connection {
+			ok
+		}
+
+		## Check User
+		if("%{sql:SELECT COUNT(*) as user_found FROM customers WHERE username='%{User-Name}'}" >= 1){
+
+			## check user limit
+			update request {
+				Tmp-Integer-0 := "%{sql:SELECT COUNT(*) FROM customers WHERE created_by=(SELECT created_by FROM customers WHERE username='%{User-Name}')}"
+				Tmp-Integer-1 := "%{sql:SELECT max_customers FROM plans WHERE id=(SELECT plan FROM users WHERE id=(SELECT created_by FROM customers WHERE username='%{User-Name}'))}"
+			}
+
+			if ((%{Tmp-Integer-0} >= %{Tmp-Integer-1}) && (%{Tmp-Integer-1} > 0)) {
+				update control {
+					Disabled-Pool := "Disabled_Plan"
+				}
+				if (&control:Disabled-Pool && &control:Disabled-Pool != "") {
+					update reply {
+						Reply-Message := "Access-Reject - Your User Limit is Over; You are assigned to Disabled Pool - %{control:Disabled-Pool}"
+						Framed-Pool := "%{control:Disabled-Pool}"
+					}
+					ok
+				} else {
+					update reply {
+						Reply-Message := "Disabled Pool Not Found"
+					}
+					reject
+				}
+			}
+
+
+			## Add Unknown Users to Disabled Pool
+			if ("%{sql:SELECT COUNT(*) FROM customers c INNER JOIN nas n ON c.created_by = n.created_by WHERE c.username='%{User-Name}' AND n.nasname='%{NAS-IP-Address}'}" > 0) {
+				# User exists and belongs to the same created_by as the NAS
+				ok
+			} else {
+				update control {
+					Disabled-Pool := "Disabled_Plan"
+				}
+				if (&control:Disabled-Pool && &control:Disabled-Pool != "") {
+					ok
+					update reply {
+						Reply-Message := "User Not Found - assigned to Disabled Pool - %{control:Disabled-Pool}"
+						Framed-Pool := "%{control:Disabled-Pool}"
+					}
+				} else {
+					update reply {
+						Reply-Message := "Disabled Pool Not Found"
+					}
+					reject
+				}
+			}
+
+			# Check if mac_lock is enabled for this user
+			if ("%{sql:SELECT IF(maclock = 1, 1, 0) as maclock_status FROM customers WHERE username='%{User-Name}'}" == 1) {
+				# Check if the mac_address is empty or NULL. If yes, insert Calling-Station-Id into mac_address
+				if ("%{sql:SELECT IF(mac_address IS NULL OR mac_address = '', 1, 0) as mac_address_status FROM customers WHERE username='%{User-Name}'}" == 1) {
+					update control {
+					Tmp-String-0 := "%{sql:UPDATE customers SET mac_address='%{Calling-Station-Id}' WHERE username='%{User-Name}' AND (mac_address IS NULL OR mac_address = '')}"
+					}
+				}
+				# Check if the Calling-Station-Id matches any of the mac addresses
+				if ("%{sql:SELECT IFNULL(FIND_IN_SET('%{Calling-Station-Id}', mac_address), 0) as is_found_status FROM customers WHERE username='%{User-Name}'}" <= 0) {
+					update reply {
+					Reply-Message := 'Wrong Mac Address'
+					}
+					reject
+				}
+			}
+
+			## Check Token User
+			if("%{sql:SELECT COUNT(*) as token_found FROM token WHERE username='%{User-Name}'}" == 1){
+				## query nas allow
+				if("%{sql:SELECT allowanynas FROM settings WHERE id=1}" == 0){
+					if("%{sql:SELECT nas.nasname FROM nas INNER JOIN token ON nas.id = token.nas_id WHERE token.username='%{User-Name}' AND token.nas_id != 0}" != "%{NAS-IP-Address}"){
+						update reply {
+							Reply-Message := 'NAS Not Allowed'
+						}
+						reject
+					}
+				}
+				update reply {
+					Reply-Message := 'Token User Found'
+				}
+
+				## query user data check
+				if("%{sql:SELECT IF(packages.dataqt = 1 AND packages.dataqtvol > 0 AND packages.data_quota_exceed_status = 1 AND packages.data_quota_exceed_type = 1 AND token.used_data_vol >= packages.dataqtvol, 1, 0) as qt_vol_con_status FROM token LEFT JOIN packages ON token.package_id = packages.id WHERE token.username='%{User-Name}'}" == 1){
+					update reply {
+						Reply-Message := 'Token Reached Data Volume'
+					}
+					reject
+				}
+				## Check Session Limit
+				if("%{sql:SELECT IF(packages.sessionqt = 1 AND packages.sessiontime > 0 AND packages.session_quota_exceed_status = 1 AND packages.session_quota_exceed_type = 1 AND token.used_session_vol >= packages.sessiontime, 1, 0) as qt_session_con_status FROM token LEFT JOIN packages ON token.package_id = packages.id WHERE token.username='%{User-Name}'}" == 1){
+					update reply {
+						Reply-Message := 'Token Reached Session Limit'
+					}
+					reject
+				}
+			}
+		}
+
+	}
+
+
+	authenticate {
+		Auth-Type PAP {
+			pap
+		}
+		Auth-Type CHAP {
+			chap
+		}
+
+		Auth-Type MS-CHAP {
+			mschap
+		}
+		mschap
+		digest
+
+		eap
+	}
+
+
+	preacct {
+		preprocess
+		acct_unique
+		suffix
+		files
+	}
+
+	accounting {
+		unix
+		sql
+		exec
+		attr_filter.accounting_response
+	}
+
+
+	session {
+		sql
+	}
+
+	post-auth {
+
+		if (&control:Expired-Pool && &control:Expired-Pool != "") {
+			# If Expired-Pool is set and is not empty, remove Framed-IP-Address and Framed-IP-Netmask
+			update reply {
+				Framed-IP-Address !* ANY
+				Framed-IP-Netmask !* ANY
+			}
+		}
+
+		# Check if Disabled-Pool exists and is not empty
+		if (&control:Disabled-Pool && &control:Disabled-Pool != "") {
+			# If Disabled-Pool is set and is not empty, remove Framed-IP-Address and Framed-IP-Netmask
+			update reply {
+				Framed-IP-Address !* ANY
+				Framed-IP-Netmask !* ANY
+			}
+		}
+
+
+		if (session-state:User-Name && reply:User-Name && request:User-Name && (reply:User-Name == request:User-Name)) {
+			update reply {
+				&User-Name !* ANY
+			}
+		}
+		update {
+			&reply: += &session-state:
+		}
+
+		reply_log
+		sql
+		exec
+
+		#  Remove reply message if the response contains an EAP-Message
+		remove_reply_message_if_eap
+
+		Post-Auth-Type REJECT {
+			sql
+			attr_filter.access_reject
+			eap
+			remove_reply_message_if_eap
+		}
+		Post-Auth-Type Challenge {
+		}
+
+		Post-Auth-Type Client-Lost {
+		}
+
+		if (EAP-Key-Name && &reply:EAP-Session-Id) {
+			update reply {
+				&EAP-Key-Name := &reply:EAP-Session-Id
+			}
+		}
+	}
+
+	pre-proxy {
+	}
+
+	post-proxy {
+
+	}
+}
