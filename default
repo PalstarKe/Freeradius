@@ -74,6 +74,10 @@ server default {
 		}
 
 		logintime
+		checkval
+		expiration
+		accessperiod
+		Max-All-Session
 		pap
 
 		Autz-Type New-TLS-Connection {
@@ -141,12 +145,33 @@ server default {
 				# Check if the Calling-Station-Id matches any of the mac addresses
 				if ("%{sql:SELECT IFNULL(FIND_IN_SET('%{Calling-Station-Id}', mac_address), 0) as is_found_status FROM customers WHERE username='%{User-Name}'}" <= 0) {
 					update reply {
-					Reply-Message := 'Wrong Mac Address'
+						Reply-Message := 'Wrong Mac Address'
+						Package-Groupname  := "Disabled_Plan"
 					}
 					reject
 				}
 			}
-
+			## Data Limit check
+			totalbytecounter{
+				reject = 1
+			}
+			if(reject){
+				update reply {
+					Reply-Message := 'SYSTEM-RADIUS-REPLY - You have reached your bandwidth limit'
+				}
+				reject
+			}
+			##FUP Policy
+			dailyquota {
+				reject = 1
+			}
+			if (reject) {
+				ok
+				update reply {
+					Mikrotik-Rate-Limit := "512k/512k"
+					Reply-Message := "You have reached your Bandwidth limit. Enforcing FUP Package"
+				}
+			}
 			## Check Token User
 			if("%{sql:SELECT COUNT(*) as token_found FROM token WHERE username='%{User-Name}'}" == 1){
 				## query nas allow
@@ -212,6 +237,27 @@ server default {
 		sql
 		exec
 		attr_filter.accounting_response
+		# CHECK OVER QUOTA USAGE
+		update control {
+			# Used QUOTA Value
+			Tmp-Integer-0 := "%{sql:SELECT (SUM(acctinputoctets)+SUM(acctoutputoctets)) AS Total FROM radacct where acctstarttime >= CURDATE() AND radacct.username='%{User-Name}'}"
+			# Value of FUP Bandwidth limit that is 512k, It is stored in a separate table
+			Tmp-String-5 := "%{sql: SELECT value FROM fup WHERE attribute='Mikrotik-Rate-Limit' AND username='%{User-Name}'}"
+			#Value of Actual QUOTA Allowed
+			Tmp-String-1 := "%{sql:  SELECT value FROM radcheck WHERE attribute='Mikrotik-Total-Limit' AND username='%{User-Name}'}"
+			Tmp-String-3 := "%{sql:select calledstationid from radacct where acctsessionid='%{Acct-Session-Id}'}"
+		}
+
+		if ("%{control:Tmp-Integer-0}" > "%{control:Tmp-String-1}"){
+			# Update COA to Mikrotik
+			update coa {
+				User-Name = "%{User-Name}"
+				Acct-Session-Id = "%{Acct-Session-Id}"
+				NAS-IP-Address = "%{NAS-IP-Address}"
+				Framed-IP-Address = "%{Framed-IP-Address}"
+				Mikrotik-Rate-Limit = "%{control:Tmp-String-5}"
+			}
+		}
 	}
 
 
@@ -256,6 +302,9 @@ server default {
 		remove_reply_message_if_eap
 
 		Post-Auth-Type REJECT {
+			update reply {
+				Reply-Message = 'Wrong Password'
+			}
 			sql
 			attr_filter.access_reject
 			eap

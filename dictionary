@@ -140,7 +140,7 @@ ATTRIBUTE   Package-ID                  3131	integer
 ATTRIBUTE   Activation-Time             3132	string
 ATTRIBUTE   Used-Session-Time           3133	integer
 ATTRIBUTE   Day-Number                  3134	integer
-ATTRIBUTE   Zal-Current-Time                3135	integer64
+ATTRIBUTE   Zal-Current-Time            3135	integer64
 
 ATTRIBUTE   Token-ID                    3136	integer
 ATTRIBUTE   Token-Activation-Time       3137	string
