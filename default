@@ -59,6 +59,36 @@ server default {
 			ok = return
 		}
 		sql
+		# 1. Get tenant ID for this customer
+		update control {
+			Tmp-Tenant-ID := "%{sql:SELECT created_by FROM customers WHERE username = '%{User-Name}' LIMIT 1}"
+		}
+		# 2. Get the tenant's plan + max_customers
+		update control {
+		        Tmp-Plan-ID := "%{sql:SELECT plan FROM users WHERE id = '%{control:Tmp-Tenant-ID}' LIMIT 1}"
+		        Tmp-Max-Customers := "%{sql:SELECT max_customers FROM plans WHERE id = '%{control:Tmp-Plan-ID}'}"
+		}
+
+		# 3. Count active sessions for this tenant in radacct
+		if ("%{control:Tmp-Max-Customers}" != "-1") {
+		        update control {
+		            Tmp-Online := "%{sql:SELECT COUNT(*) FROM radacct WHERE created_by = '%{control:Tmp-Tenant-ID}' AND acctstoptime IS NULL}"
+		        }
+		
+		        # 4. If limit exceeded, assign customer to Disabled_plan
+		        if ("%{control:Tmp-Online}" >= "%{control:Tmp-Max-Customers}") {
+		            update control {
+		                Tmp-Group-Name := "Disabled_plan"
+		            }
+		
+		            update reply {
+		                Reply-Message := "Your ISP plan has reached its customer limit."
+		            }
+		
+		            accept
+		        }
+		}
+
 		if ("%{sql:UPDATE radacct set acctstoptime=ADDDATE(acctstarttime, INTERVAL acctsessiontime SECOND), acctterminatecause='Clear Stale Session' WHERE username='%{User-Name}' AND callingstationid='%{Calling-Station-Id}' AND acctstoptime is NULL}") {
 			# Reply with a message to indicate the stale session has been cleared.
 			update reply {
@@ -72,6 +102,7 @@ server default {
 				Framed-IP-Address = "%{Framed-IP-Address}"
 			}
 		}
+
 
 		logintime
 		checkval
