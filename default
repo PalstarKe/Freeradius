@@ -180,7 +180,7 @@ server default {
 	        }
 	
 	        if ("%{sql:SELECT IFNULL(FIND_IN_SET('%{Calling-Station-Id}', mac_address), 0) FROM customers WHERE username='%{User-Name}'}" <= 0) {
-	            if ("&control:Tmp-Service" == "pppoe") {
+	            if ("%{tolower:%{control:Tmp-Service}}" == "pppoe") {
 	                update control {
 	                    Tmp-Group-Name := "Disabled_plan"
 	                }
