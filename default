@@ -89,7 +89,8 @@ server default {
 	        	#Tmp-Service := "%{sql:SELECT service FROM customers WHERE username = '%{User-Name}'}"
 	        	Tmp-Is-Override := "%{sql:SELECT is_override FROM customers WHERE username = '%{User-Name}'}"
 	    	}
-		if ("%{control:Tmp-Service}" == "") {
+
+		if ("&control:Tmp-Service" == "") {
 		    if ("%{tolower:%{Framed-Protocol}}" == "ppp") {
 		        update control {
 		            Tmp-Service := "pppoe"
@@ -263,7 +264,7 @@ server default {
 	post-auth {
 		if (&control:Tmp-Group-Name) {
 		        update {
-		            Tmp-Write-Group := "%{sql:INSERT INTO radusergroup (username, groupname, priority, created_by) VALUES ('%{User-Name}', '%{control:Tmp-Group-Name}', 1, '%{control:Tmp-Tenant-ID}') ON DUPLICATE KEY UPDATE groupname = VALUES(groupname)}"
+		            Tmp-DB-Update := "%{sql:INSERT INTO radusergroup (username, groupname, priority, created_by) VALUES ('%{User-Name}', '%{control:Tmp-Group-Name}', 1, '%{control:Tmp-Tenant-ID}') ON DUPLICATE KEY UPDATE groupname = VALUES(groupname)}"
 		        }
 		}
 
