@@ -1,7 +1,6 @@
 ###########################################################################
 #  Sample virtual server for receiving a CoA or Disconnect-Request packet.#
 ###########################################################################
-
 listen {
 	type = coa
 	ipaddr = *
@@ -10,29 +9,36 @@ listen {
 }
 
 server coa {
-	recv-coa {
-		suffix
-		ok
-	}
 	recv CoA-Request {
-                ok
-        }
-	send-coa {
+		# Optional: log or load modules
+		# sql
+		update request {
+			Reply-Message := "CoA Accepted"
+		}
 		ok
 	}
-        send CoA-ACK {
-                ok
-        }
-        send CoA-NAK {
-                ok
-        }
-        recv Disconnect-Request {
-                ok
-        }
-        send Disconnect-ACK {
-                ok
-        }
-        send Disconnect-NAK {
-                ok
-        }
+
+	send CoA-ACK {
+		ok
+	}
+	send CoA-NAK {
+		ok
+	}
+
+	recv Disconnect-Request {
+		# Optional: log or run disconnect logic
+		# sql
+		update request {
+			Reply-Message := "Session disconnected"
+		}
+		ok
+	}
+
+	send Disconnect-ACK {
+		ok
+	}
+	send Disconnect-NAK {
+		ok
+	}
 }
+
