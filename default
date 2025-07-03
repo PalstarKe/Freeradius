@@ -91,20 +91,19 @@ server default {
 	    	}
 
     		# 4. Apply override if enabled
-    		if ("%{sql:SELECT is_override FROM customers WHERE username = '%{User-Name}' LIMIT 1}" == "1" &&
-		    "%{sql:SELECT override_upload FROM customers WHERE username = '%{User-Name}' LIMIT 1}" != "" &&
-		    "%{sql:SELECT override_download FROM customers WHERE username = '%{User-Name}' LIMIT 1}" != "") {
+    		update reply {
+			Mikrotik-Rate-Limit := "%{sql:SELECT IF(is_override = 1 AND override_upload IS NOT NULL AND override_download IS NOT NULL,
+				CONCAT(override_upload, override_upload_unit, '/', override_download, override_download_unit),
+				(SELECT CONCAT(p.upload_speed, p.upload_unit, '/', p.download_speed, p.download_unit)
+				 FROM customers c
+				 JOIN packages p ON p.id = c.package_id
+				 WHERE c.username = '%{User-Name}'
+				 LIMIT 1)
+			) FROM customers WHERE username = '%{User-Name}' LIMIT 1}"
 			
-			update reply {
-				Mikrotik-Rate-Limit := "%{sql:SELECT CONCAT(override_upload, override_upload_unit, '/', override_download, override_download_unit) FROM customers WHERE username = '%{User-Name}' LIMIT 1}"
-				Reply-Message := "Override plan active"
-			}
-		} else {
-			update reply {
-				Mikrotik-Rate-Limit := "%{sql:SELECT CONCAT(p.upload_speed, p.upload_unit, '/', p.download_speed, p.download_unit) FROM customers c JOIN packages p ON p.id = c.package_id WHERE c.username = '%{User-Name}' LIMIT 1}"
-				Reply-Message := "Package plan active"
-			}
+			Reply-Message := "%{sql:SELECT IF(is_override = 1 AND override_upload IS NOT NULL AND override_download IS NOT NULL, 'Override plan active', 'Package plan active') FROM customers WHERE username = '%{User-Name}' LIMIT 1}"
 		}
+
 
     		# 5. Expiry check
 	    	if ("%{sql:SELECT IF((expiry < NOW() AND (extension_expiry IS NULL OR extension_expiry < NOW())), 1, 0) FROM customers WHERE username='%{User-Name}'}" == 1) {
