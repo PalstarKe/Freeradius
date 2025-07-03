@@ -49,154 +49,154 @@ server default {
 	}
 
 	authorize {
-    preprocess
-    auth_log
-    chap
-    mschap
-    digest
-    suffix
+    		preprocess
+    		auth_log
+    		chap
+		mschap
+		digest
+		suffix
 
-    pap
+    		pap
 
-    eap {
-        ok = return
-    }
+    		eap {
+        		ok = return
+    		}
 
-    sql
+    		sql
 
-    # 1. Get tenant ID
-    update control {
-        Tmp-Tenant-ID := "%{sql:SELECT created_by FROM customers WHERE username = '%{User-Name}' LIMIT 1}"
-    }
+    		# 1. Get tenant ID
+	    	update control {
+	        	Tmp-Tenant-ID := "%{sql:SELECT created_by FROM customers WHERE username = '%{User-Name}' LIMIT 1}"
+	    	}
 
-    # 2. Get plan + max customers
-    update control {
-        Tmp-Plan-ID := "%{sql:SELECT plan FROM users WHERE id = '%{control:Tmp-Tenant-ID}' LIMIT 1}"
-        Tmp-Max-Customers := "%{sql:SELECT max_customers FROM plans WHERE id = '%{control:Tmp-Plan-ID}'}"
-    }
+   		 # 2. Get plan + max customers
+	    	update control {
+			Tmp-Plan-ID := "%{sql:SELECT plan FROM users WHERE id = '%{control:Tmp-Tenant-ID}' LIMIT 1}"
+			Tmp-Max-Customers := "%{sql:SELECT max_customers FROM plans WHERE id = '%{control:Tmp-Plan-ID}'}"
+	    	}
 
-    # 3. Get service type & override flag
-    update control {
-        Tmp-Service := "%{sql:SELECT service FROM customers WHERE username = '%{User-Name}'}"
-        Tmp-Is-Override := "%{sql:SELECT is_override FROM customers WHERE username = '%{User-Name}'}"
-    }
+    		# 3. Get service type & override flag
+	    	update control {
+	        	Tmp-Service := "%{sql:SELECT service FROM customers WHERE username = '%{User-Name}'}"
+	        	Tmp-Is-Override := "%{sql:SELECT is_override FROM customers WHERE username = '%{User-Name}'}"
+	    	}
 
-    # 4. Apply override if enabled
-    if ("%{control:Tmp-Is-Override}" == 1) {
-        update reply {
-            Mikrotik-Rate-Limit := "%{sql:SELECT CONCAT(override_upload, '/', override_download) FROM customers WHERE username = '%{User-Name}'}"
-            Framed-Pool := "OVERRIDE_POOL"
-            Reply-Message := "Override plan active"
-        }
-        accept
-    }
+    		# 4. Apply override if enabled
+    		if ("%{control:Tmp-Is-Override}" == 1) {
+		        update reply {
+		            Mikrotik-Rate-Limit := "%{sql:SELECT CONCAT(override_upload, '/', override_download) FROM customers WHERE username = '%{User-Name}'}"
+		            Framed-Pool := "OVERRIDE_POOL"
+		            Reply-Message := "Override plan active"
+		        }
+		        accept
+		}
 
-    # 5. Expiry check
-    if ("%{sql:SELECT IF((expiry < NOW() AND (extension_expiry IS NULL OR extension_expiry < NOW())), 1, 0) FROM customers WHERE username='%{User-Name}'}" == 1) {
-        if ("%{control:Tmp-Service}" == "pppoe") {
-            update control {
-                Tmp-Group-Name := "Expired_plan"
-            }
-            update reply {
-                Reply-Message := "Account expired. Expired plan applied."
-            }
-            accept
-        }
+    		# 5. Expiry check
+	    	if ("%{sql:SELECT IF((expiry < NOW() AND (extension_expiry IS NULL OR extension_expiry < NOW())), 1, 0) FROM customers WHERE username='%{User-Name}'}" == 1) {
+	        	if ("%{control:Tmp-Service}" == "pppoe") {
+		           	 update control {
+		                	Tmp-Group-Name := "Expired_plan"
+		            	}
+		            	update reply {
+			                Reply-Message := "Account expired. Expired plan applied."
+		            	}
+		            	accept
+	        	}
+	
+	       		 # Hotspot gets reject
+	        	update reply {
+	            		Reply-Message := "Your account has expired. Please renew."
+	       	 	}
+	        	reject
+	    	}
 
-        # Hotspot gets reject
-        update reply {
-            Reply-Message := "Your account has expired. Please renew."
-        }
-        reject
-    }
+    		# 6. Tenant customer limit check
+	    	if ("%{control:Tmp-Max-Customers}" != "-1") {
+	        	update control {
+	            		Tmp-Online := "%{sql:SELECT COUNT(*) FROM radacct WHERE created_by = '%{control:Tmp-Tenant-ID}' AND acctstoptime IS NULL}"
+	        	}
+	
+	        	if ("%{control:Tmp-Online}" >= "%{control:Tmp-Max-Customers}") {
+	            		if ("%{control:Tmp-Service}" == "pppoe") {
+	                		update control {
+	                    		Tmp-Group-Name := "Disabled_plan"
+	                	}
+	                	update reply {
+	                    		Reply-Message := "Customer limit reached. Access limited."
+	                	}
+	                	accept
+	            	}
+	
+	            	update reply {
+	                	Reply-Message := "Your ISP customer limit has been reached. Please try later."
+	            	}
+	           	 reject
+	        	}
+	    	}
 
-    # 6. Tenant customer limit check
-    if ("%{control:Tmp-Max-Customers}" != "-1") {
-        update control {
-            Tmp-Online := "%{sql:SELECT COUNT(*) FROM radacct WHERE created_by = '%{control:Tmp-Tenant-ID}' AND acctstoptime IS NULL}"
-        }
+	    # 7. Clear stale duplicate PPPoE sessions
+	    if ("%{sql:UPDATE radacct SET acctstoptime = ADDDATE(acctstarttime, INTERVAL acctsessiontime SECOND), acctterminatecause = 'Clear Stale Session' WHERE username = '%{User-Name}' AND callingstationid = '%{Calling-Station-Id}' AND acctstoptime IS NULL}") {
+	        update reply {
+	            Reply-Message := "Cleared stale session."
+	        }
+	        update disconnect {
+	            User-Name = "%{request:User-Name}"
+	            Calling-Station-Id = "%{Calling-Station-Id}"
+	            Framed-IP-Address = "%{Framed-IP-Address}"
+	        }
+	    }
 
-        if ("%{control:Tmp-Online}" >= "%{control:Tmp-Max-Customers}") {
-            if ("%{control:Tmp-Service}" == "pppoe") {
-                update control {
-                    Tmp-Group-Name := "Disabled_plan"
-                }
-                update reply {
-                    Reply-Message := "Customer limit reached. Access limited."
-                }
-                accept
-            }
+	    # 8. Invalid password → assign Disabled_plan (PPPoE) or reject (Hotspot)
+	    if (!ok && &control:Auth-Type == 'PAP') {
+	        if ("%{control:Tmp-Service}" == "pppoe") {
+	            update control {
+	                Auth-Type := Accept
+	                Tmp-Group-Name := "Disabled_plan"
+	            }
+	            update reply {
+	                Reply-Message := "Invalid credentials. Limited access."
+	            }
+	            accept
+	        }
+	
+	        update reply {
+	            Reply-Message := "Login failed. Please try again or pay."
+	        }
+	        reject
+	    }
 
-            update reply {
-                Reply-Message := "Your ISP customer limit has been reached. Please try later."
-            }
-            reject
-        }
-    }
+	    # 9. MAC Lock
+	    if ("%{sql:SELECT maclock FROM customers WHERE username='%{User-Name}'}" == 1) {
+	        if ("%{sql:SELECT IF(mac_address IS NULL OR mac_address = '', 1, 0) FROM customers WHERE username='%{User-Name}'}" == 1) {
+	            update control {
+	                Tmp-String-0 := "%{sql:UPDATE customers SET mac_address='%{Calling-Station-Id}' WHERE username='%{User-Name}' AND (mac_address IS NULL OR mac_address = '')}"
+	            }
+	        }
+	
+	        if ("%{sql:SELECT IFNULL(FIND_IN_SET('%{Calling-Station-Id}', mac_address), 0) FROM customers WHERE username='%{User-Name}'}" <= 0) {
+	            if ("%{control:Tmp-Service}" == "pppoe") {
+	                update control {
+	                    Tmp-Group-Name := "Disabled_plan"
+	                }
+	                update reply {
+	                    Reply-Message := "MAC mismatch. Limited access."
+	                }
+	                accept
+	            }
+	
+	            update reply {
+	                Reply-Message := "MAC mismatch. Please use your registered device."
+	            }
+	            reject
+	        }
+	    }
 
-    # 7. Clear stale duplicate PPPoE sessions
-    if ("%{sql:UPDATE radacct SET acctstoptime = ADDDATE(acctstarttime, INTERVAL acctsessiontime SECOND), acctterminatecause = 'Clear Stale Session' WHERE username = '%{User-Name}' AND callingstationid = '%{Calling-Station-Id}' AND acctstoptime IS NULL}") {
-        update reply {
-            Reply-Message := "Cleared stale session."
-        }
-        update disconnect {
-            User-Name = "%{request:User-Name}"
-            Calling-Station-Id = "%{Calling-Station-Id}"
-            Framed-IP-Address = "%{Framed-IP-Address}"
-        }
-    }
-
-    # 8. Invalid password → assign Disabled_plan (PPPoE) or reject (Hotspot)
-    if (!ok && &control:Auth-Type == 'PAP') {
-        if ("%{control:Tmp-Service}" == "pppoe") {
-            update control {
-                Auth-Type := Accept
-                Tmp-Group-Name := "Disabled_plan"
-            }
-            update reply {
-                Reply-Message := "Invalid credentials. Limited access."
-            }
-            accept
-        }
-
-        update reply {
-            Reply-Message := "Login failed. Please try again or pay."
-        }
-        reject
-    }
-
-    # 9. MAC Lock
-    if ("%{sql:SELECT maclock FROM customers WHERE username='%{User-Name}'}" == 1) {
-        if ("%{sql:SELECT IF(mac_address IS NULL OR mac_address = '', 1, 0) FROM customers WHERE username='%{User-Name}'}" == 1) {
-            update control {
-                Tmp-String-0 := "%{sql:UPDATE customers SET mac_address='%{Calling-Station-Id}' WHERE username='%{User-Name}' AND (mac_address IS NULL OR mac_address = '')}"
-            }
-        }
-
-        if ("%{sql:SELECT IFNULL(FIND_IN_SET('%{Calling-Station-Id}', mac_address), 0) FROM customers WHERE username='%{User-Name}'}" <= 0) {
-            if ("%{control:Tmp-Service}" == "pppoe") {
-                update control {
-                    Tmp-Group-Name := "Disabled_plan"
-                }
-                update reply {
-                    Reply-Message := "MAC mismatch. Limited access."
-                }
-                accept
-            }
-
-            update reply {
-                Reply-Message := "MAC mismatch. Please use your registered device."
-            }
-            reject
-        }
-    }
-
-    logintime
-    checkval
-    expiration
-    accessperiod
-    Max-All-Session
-}
+    		logintime
+    		checkval
+    		expiration
+    		accessperiod
+    		Max-All-Session
+	}
 
 
 	authenticate {
