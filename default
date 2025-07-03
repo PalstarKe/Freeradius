@@ -197,10 +197,10 @@ server default {
 	    }
 
     		logintime
-    		checkval
+    		#checkval
     		expiration
-    		accessperiod
-    		Max-All-Session
+    		#accessperiod
+    		#Max-All-Session
 	}
 
 
