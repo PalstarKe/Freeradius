@@ -86,9 +86,20 @@ server default {
 
     		# 3. Get service type & override flag
 	    	update control {
-	        	Tmp-Service := "%{sql:SELECT service FROM customers WHERE username = '%{User-Name}'}"
+	        	#Tmp-Service := "%{sql:SELECT service FROM customers WHERE username = '%{User-Name}'}"
 	        	Tmp-Is-Override := "%{sql:SELECT is_override FROM customers WHERE username = '%{User-Name}'}"
 	    	}
+		if ("%{control:Tmp-Service}" == "") {
+		    if ("%{tolower:%{Framed-Protocol}}" == "ppp") {
+		        update control {
+		            Tmp-Service := "pppoe"
+		        }
+		    } else {
+		        update control {
+		            Tmp-Service := "hotspot"
+		        }
+		    }
+		}
 
     		# 4. Apply override if enabled
 		    update reply {
