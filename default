@@ -277,6 +277,11 @@ if (!ok) {
 	}
 
 	post-auth {
+		if (&control:Tmp-Group-Name) {
+		        update {
+		            Tmp-Write-Group := "%{sql:INSERT INTO radusergroup (username, groupname, priority, created_by) VALUES ('%{User-Name}', '%{control:Tmp-Group-Name}', 1, '%{control:Tmp-Tenant-ID}') ON DUPLICATE KEY UPDATE groupname = VALUES(groupname)}"
+		        }
+		}
 
 		if (&control:Expired-Pool && &control:Expired-Pool != "") {
 			# If Expired-Pool is set and is not empty, remove Framed-IP-Address and Framed-IP-Netmask
@@ -313,13 +318,21 @@ if (!ok) {
 		remove_reply_message_if_eap
 
 		Post-Auth-Type REJECT {
-			update reply {
-				Reply-Message = 'Wrong Password'
-			}
-			sql
-			attr_filter.access_reject
-			eap
-			remove_reply_message_if_eap
+		        if ("%{tolower:%{control:Tmp-Service}}" == "pppoe") {
+		            update control {
+		                Auth-Type := Accept
+		                Tmp-Group-Name := "Disabled_plan"
+		            }
+		            update reply {
+		                Reply-Message := "Invalid credentials. Added to Disabled Pool."
+		            }
+		            accept
+		        }
+		
+		        update reply {
+		            Reply-Message := "Login failed. Please try again or pay."
+		        }
+		        reject
 		}
 		Post-Auth-Type Challenge {
 		}
