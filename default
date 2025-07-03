@@ -152,7 +152,7 @@ server default {
 	    }
 
 	    # 8. Invalid password → assign Disabled_plan (PPPoE) or reject (Hotspot)
-	    if (!ok && &control:Auth-Type == 'PAP') {
+	    if (!ok && &control:Auth-Type == PAP) {
 	        if ("%{control:Tmp-Service}" == "pppoe") {
 	            update control {
 	                Auth-Type := Accept
