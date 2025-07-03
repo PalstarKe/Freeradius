@@ -19,14 +19,14 @@ ATTRIBUTE Tmp-Max-Customers  3003 string
 ATTRIBUTE Tmp-Online         3004 string
 ATTRIBUTE Tmp-Service        3005 string
 ATTRIBUTE Tmp-Is-Override    3006 string
-ATTRIBUTE Tmp-String-0       3007 string
+ATTRIBUTE Tmp-Set-Site       3007 string
 
 
 ATTRIBUTE   Package-ID                  3131	integer
 ATTRIBUTE   Activation-Time             3132	string
 ATTRIBUTE   Used-Session-Time           3133	integer
 ATTRIBUTE   Day-Number                  3134	integer
-ATTRIBUTE   Current-Time                3135	integer64
+ATTRIBUTE   Nex-Current-Time                3135	integer64
 
 ATTRIBUTE   Token-ID                    3136	integer
 ATTRIBUTE   Token-Activation-Time       3137	string
