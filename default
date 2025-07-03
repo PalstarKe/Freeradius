@@ -97,23 +97,24 @@ server default {
 		}
 
     		# 5. Expiry check
-	    	if ("%{sql:SELECT IF((expiry < NOW() AND (extension_expiry IS NULL OR extension_expiry < NOW())), 1, 0) FROM customers WHERE username='%{User-Name}'}" == 1) {
-	        	if ("&control:Tmp-Service" == "pppoe") {
-		           	 update control {
-		                	Tmp-Group-Name := "Expired_plan"
-		            	}
-		            	update reply {
-			                Reply-Message := "Account expired. Expired plan applied."
-		            	}
-		            	accept
-	        	}
-	
-	       		 # Hotspot gets reject
-	        	update reply {
-	            		Reply-Message := "Your account has expired. Please renew."
-	       	 	}
-	        	reject
-	    	}
+	    	# 5. Expiry check
+		if ("%{sql:SELECT IF((expiry < NOW() AND (extension_expiry IS NULL OR extension_expiry < NOW())), 1, 0) FROM customers WHERE username = '%{User-Name}' LIMIT 1}" == "1") {
+		
+		    if ("%{tolower:%{control:Tmp-Service}}" == "pppoe") {
+			update control {
+			    Tmp-Group-Name := "Expired_plan"
+			}
+			update reply {
+			    Reply-Message := "Account expired. Expired plan applied."
+			}
+			accept
+		    }
+		
+		    update reply {
+			Reply-Message := "Your account has expired. Please renew."
+		    }
+		    reject
+		}
 
     		# 6. Tenant customer limit check
 	    	if ("&control:Tmp-Max-Customers" != "-1") {
