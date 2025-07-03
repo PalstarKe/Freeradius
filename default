@@ -65,9 +65,18 @@ server default {
     		sql
 
     		# 1. Get tenant ID
-	    	update control {
-	        	Tmp-Tenant-ID := "%{sql:SELECT created_by FROM customers WHERE username = '%{User-Name}' LIMIT 1}"
-	    	}
+	    	# Get tenant ID from NAS table by matching nasipaddress
+		update control {
+			Tmp-Tenant-ID := "%{sql:SELECT created_by FROM nas WHERE nasname = '%{NAS-IP-Address}' LIMIT 1}"
+		}
+		
+		# Set site for the correct customer if not already set
+		if ("%{sql:SELECT COUNT(*) FROM customers WHERE username = '%{User-Name}' AND site IS NULL AND created_by = '%{control:Tmp-Tenant-ID}'}" > 0) {
+			update control {
+				Tmp-Set-Site := "%{sql:UPDATE customers SET site = '%{NAS-IP-Address}' WHERE username = '%{User-Name}' AND site IS NULL AND created_by = '%{control:Tmp-Tenant-ID}'}"
+			}
+		}
+
 
    		 # 2. Get plan + max customers
 	    	update control {
