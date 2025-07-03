@@ -98,7 +98,7 @@ server default {
 
     		# 5. Expiry check
 	    	if ("%{sql:SELECT IF((expiry < NOW() AND (extension_expiry IS NULL OR extension_expiry < NOW())), 1, 0) FROM customers WHERE username='%{User-Name}'}" == 1) {
-	        	if ("%{control:Tmp-Service}" == "pppoe") {
+	        	if ("&control:Tmp-Service" == "pppoe") {
 		           	 update control {
 		                	Tmp-Group-Name := "Expired_plan"
 		            	}
@@ -116,13 +116,13 @@ server default {
 	    	}
 
     		# 6. Tenant customer limit check
-	    	if ("%{control:Tmp-Max-Customers}" != "-1") {
+	    	if ("&control:Tmp-Max-Customers" != "-1") {
 	        	update control {
 	            		Tmp-Online := "%{sql:SELECT COUNT(*) FROM radacct WHERE created_by = '%{control:Tmp-Tenant-ID}' AND acctstoptime IS NULL}"
 	        	}
 	
 	        	if ("%{control:Tmp-Online}" >= "%{control:Tmp-Max-Customers}") {
-	            		if ("%{control:Tmp-Service}" == "pppoe") {
+	            		if ("&control:Tmp-Service" == "pppoe") {
 	                		update control {
 	                    		Tmp-Group-Name := "Disabled_plan"
 	                	}
@@ -153,7 +153,7 @@ server default {
 
 	    # 8. Invalid password → assign Disabled_plan (PPPoE) or reject (Hotspot)
 	    if (!ok && &control:Auth-Type == PAP) {
-	        if ("%{control:Tmp-Service}" == "pppoe") {
+	        if ("&control:Tmp-Service" == "pppoe") {
 	            update control {
 	                Auth-Type := Accept
 	                Tmp-Group-Name := "Disabled_plan"
@@ -179,7 +179,7 @@ server default {
 	        }
 	
 	        if ("%{sql:SELECT IFNULL(FIND_IN_SET('%{Calling-Station-Id}', mac_address), 0) FROM customers WHERE username='%{User-Name}'}" <= 0) {
-	            if ("%{control:Tmp-Service}" == "pppoe") {
+	            if ("&control:Tmp-Service" == "pppoe") {
 	                update control {
 	                    Tmp-Group-Name := "Disabled_plan"
 	                }
