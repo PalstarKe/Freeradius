@@ -137,7 +137,7 @@ server default {
 	                    		Tmp-Group-Name := "Disabled_plan"
 	                	}
 	                	update reply {
-	                    		Reply-Message := "Customer limit reached. Access limited."
+	                    		Reply-Message := "Customer limit reached. Added to Disabled Pool."
 	                	}
 	                	accept
 	            	}
@@ -169,7 +169,7 @@ server default {
 	                Tmp-Group-Name := "Disabled_plan"
 	            }
 	            update reply {
-	                Reply-Message := "Invalid credentials. Limited access."
+	                Reply-Message := "Invalid credentials. Added to Disabled Pool."
 	            }
 	            accept
 	        }
@@ -194,7 +194,7 @@ server default {
 	                    Tmp-Group-Name := "Disabled_plan"
 	                }
 	                update reply {
-	                    Reply-Message := "MAC mismatch. Limited access."
+	                    Reply-Message := "MAC mismatch. Added to Disabled Pool."
 	                }
 	                accept
 	            }
