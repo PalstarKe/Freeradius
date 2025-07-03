@@ -123,7 +123,7 @@ server default {
 	        	}
 	
 	        	if ("%{control:Tmp-Online}" >= "%{control:Tmp-Max-Customers}") {
-	            		if ("&control:Tmp-Service" == "pppoe") {
+	            		if ("%{tolower:%{control:Tmp-Service}}" == "pppoe") {
 	                		update control {
 	                    		Tmp-Group-Name := "Disabled_plan"
 	                	}
@@ -154,7 +154,7 @@ server default {
 
 	    # 8. Invalid password → assign Disabled_plan (PPPoE) or reject (Hotspot)
 	    if (!ok && &control:Auth-Type == PAP) {
-	        if ("&control:Tmp-Service" == "pppoe") {
+	        if ("%{tolower:%{control:Tmp-Service}}" == "pppoe") {
 	            update control {
 	                Auth-Type := Accept
 	                Tmp-Group-Name := "Disabled_plan"
