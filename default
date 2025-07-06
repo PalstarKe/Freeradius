@@ -1,10 +1,15 @@
-#########################################################################
+######################################################################
 server default {
 
 	listen {
 		type = auth
+		# ipv4addr = *
+		# ipv6addr = *
 		ipaddr = *
 		port = 0
+		#interface = eth0
+		# clients = per_socket_clients
+		# recv_buff = 65536
 		limit {
 			max_connections = 16
 			lifetime = 0
@@ -14,8 +19,12 @@ server default {
 
 	listen {
 		ipaddr = *
+		# ipv6addr = ::
 		port = 0
 		type = acct
+		# interface = eth0
+		# clients = per_socket_clients
+
 		limit {
 			# max_pps = 0
 			# idle_timeout = 0
@@ -24,10 +33,13 @@ server default {
 		}
 	}
 
+	# IPv6 versions of the above - read their full config to understand options
 	listen {
 		type = auth
-		ipv6addr = ::
+		ipv6addr = ::	# any.  ::1 == localhost
 		port = 0
+		# interface = eth0
+		# clients = per_socket_clients
 		limit {
 			max_connections = 0
 			lifetime = 0
@@ -39,6 +51,8 @@ server default {
 		ipv6addr = ::
 		port = 0
 		type = acct
+		# interface = eth0
+		# clients = per_socket_clients
 
 		limit {
 			# max_pps = 0
@@ -49,27 +63,23 @@ server default {
 	}
 
 	authorize {
-    		preprocess
-    		auth_log
-    		chap
+		preprocess
+		auth_log
+		chap
 		mschap
 		digest
 		suffix
+		eap {
+			ok = return
+		}
+		sql
 
-    		pap
-
-    		eap {
-        		ok = return
-    		}
-
-    		sql
-
-    		# 1. Get tenant ID
-	    	# Get tenant ID from NAS table by matching nasipaddress
+		# 1. Get tenant ID
+		# Get tenant ID from NAS table by matching nasipaddress
 		update control {
 			Tmp-Tenant-ID := "%{sql:SELECT created_by FROM nas WHERE nasname = '%{NAS-IP-Address}' LIMIT 1}"
 		}
-		
+			
 		# Set site for the correct customer if not already set
 		if ("%{sql:SELECT COUNT(*) FROM customers WHERE username = '%{User-Name}' AND site IS NULL AND created_by = '%{control:Tmp-Tenant-ID}'}" > 0) {
 			update control {
@@ -77,131 +87,187 @@ server default {
 			}
 		}
 
-
-   		 # 2. Get plan + max customers
-	    	update control {
+		# 2. Get plan + max customers
+		update control {
 			Tmp-Plan-ID := "%{sql:SELECT plan FROM users WHERE id = '%{control:Tmp-Tenant-ID}' LIMIT 1}"
 			Tmp-Max-Customers := "%{sql:SELECT max_customers FROM plans WHERE id = '%{control:Tmp-Plan-ID}'}"
-	    	}
-
-    		# 3. Get service type & override flag
-	    	update control {
-	        	#Tmp-Service := "%{sql:SELECT service FROM customers WHERE username = '%{User-Name}'}"
-	        	Tmp-Is-Override := "%{sql:SELECT is_override FROM customers WHERE username = '%{User-Name}'}"
-	    	}
-
-		if ("&control:Tmp-Service" == "") {
-		    if ("%{tolower:%{Framed-Protocol}}" == "ppp") {
-		        update control {
-		            Tmp-Service := "pppoe"
-		        }
-		    } else {
-		        update control {
-		            Tmp-Service := "hotspot"
-		        }
-		    }
 		}
 
-    		# 4. Apply override if enabled
-		    update reply {
-			Mikrotik-Rate-Limit := "%{sql:SELECT IF(is_override = 1 AND override_upload IS NOT NULL AND override_download IS NOT NULL, CONCAT(override_upload, override_upload_unit, '/', override_download, override_download_unit), (SELECT CONCAT(p.upload_speed, p.upload_unit, '/', p.download_speed, p.download_unit) FROM packages p JOIN customers c2 ON c2.package_id = p.id WHERE c2.username = '%{User-Name}' LIMIT 1)) FROM customers WHERE username = '%{User-Name}' LIMIT 1}"
-			Reply-Message := "%{sql:SELECT IF(is_override = 1 AND override_upload IS NOT NULL AND override_download IS NOT NULL, 'Override plan active', 'Package plan active') FROM customers WHERE username = '%{User-Name}' LIMIT 1}"
-		}
-
-    		# 5. Expiry check
-	    	# 5. Expiry check
-		if ("%{sql:SELECT IF((expiry < NOW() AND (extension_expiry IS NULL OR extension_expiry < NOW())), 1, 0) FROM customers WHERE username = '%{User-Name}' LIMIT 1}" == "1") {
-		
-		    if ("%{tolower:%{control:Tmp-Service}}" == "pppoe") {
-			update control {
-			    Tmp-Group-Name := "Expired_plan"
-			}
+		# Update radacct to handle stale sessions.
+		if ("%{sql:UPDATE radacct set acctstoptime=ADDDATE(acctstarttime, INTERVAL acctsessiontime SECOND), acctterminatecause='Clear Stale Session' WHERE username='%{User-Name}' AND callingstationid='%{Calling-Station-Id}' AND acctstoptime is NULL AND created_by = '%{control:Tmp-Tenant-ID}'}") {
+			
+			# Reply with a message to indicate the stale session has been cleared.
 			update reply {
-			    Reply-Message := "Account expired. Expired plan applied."
+				Reply-Message := "Disconnect Duplicate User & Clear Stale Session"
 			}
-			accept
-		    }
-		
-		    update reply {
-			Reply-Message := "Your account has expired. Please renew."
-		    }
-		    reject
+
+			# Disconnect the user if they have the same username & MAC online. 
+			update disconnect {
+				User-Name = "%{request:User-Name}"
+				Calling-Station-Id = "%{Calling-Station-Id}"
+				Framed-IP-Address = "%{Framed-IP-Address}"
+			}
 		}
 
-    		# 6. Tenant customer limit check
-	    	if ("&control:Tmp-Max-Customers" != "-1") {
-	        	update control {
-	            		Tmp-Online := "%{sql:SELECT COUNT(*) FROM radacct WHERE created_by = '%{control:Tmp-Tenant-ID}' AND acctstoptime IS NULL}"
-	        	}
-	
-	        	if ("%{control:Tmp-Online}" >= "%{control:Tmp-Max-Customers}") {
-	            		if ("%{tolower:%{control:Tmp-Service}}" == "pppoe") {
-	                		update control {
-	                    		Tmp-Group-Name := "Disabled_plan"
-	                	}
-	                	update reply {
-	                    		Reply-Message := "Customer limit reached. Added to Disabled Pool."
-	                	}
-	                	accept
-	            	}
-	
-	            	update reply {
-	                	Reply-Message := "Your ISP customer limit has been reached. Please try later."
-	            	}
-	           	 reject
-	        	}
-	    	}
+		logintime
+		pap
 
-	    # 7. Clear stale duplicate PPPoE sessions
-	    if ("%{sql:UPDATE radacct SET acctstoptime = ADDDATE(acctstarttime, INTERVAL acctsessiontime SECOND), acctterminatecause = 'Clear Stale Session' WHERE username = '%{User-Name}' AND callingstationid = '%{Calling-Station-Id}' AND acctstoptime IS NULL}") {
-	        update reply {
-	            Reply-Message := "Cleared stale session."
-	        }
-	        update disconnect {
-	            User-Name = "%{request:User-Name}"
-	            Calling-Station-Id = "%{Calling-Station-Id}"
-	            Framed-IP-Address = "%{Framed-IP-Address}"
-	        }
-	    }
+		Autz-Type New-TLS-Connection {
+			ok
+		}
+		
+		## Check User
+		if("%{sql:SELECT COUNT(*) as user_found FROM customers WHERE username='%{User-Name}' AND created_by = '%{control:Tmp-Tenant-ID}'}" >= 1){
+			# 3. Get service type & override flag
+			update control {
+				Tmp-Is-Override := "%{sql:SELECT is_override FROM customers WHERE username = '%{User-Name}' AND created_by = '%{control:Tmp-Tenant-ID}'}"
+			}
 
-	    # 8. Invalid password → assign Disabled_plan (PPPoE) or reject (Hotspot)
-	    # Match if authentication failed
+			if ("&control:Tmp-Service" == "") {
+				if ("%{tolower:%{Framed-Protocol}}" == "ppp") {
+					update control {
+						Tmp-Service := "pppoe"
+					}
+				} else {
+					update control {
+						Tmp-Service := "hotspot"
+					}
+				}
+			}
 
+			# 4. Apply override if enabled
+			update reply {
+				Mikrotik-Rate-Limit := "%{sql:SELECT IF(is_override = 1 AND override_upload IS NOT NULL AND override_download IS NOT NULL, CONCAT(override_upload, override_upload_unit, '/', override_download, override_download_unit), (SELECT CONCAT(p.upload_speed, p.upload_unit, '/', p.download_speed, p.download_unit) FROM packages p JOIN customers c2 ON c2.package_id = p.id WHERE c2.username = '%{User-Name}' AND created_by = '%{control:Tmp-Tenant-ID}' LIMIT 1)) FROM customers WHERE username = '%{User-Name}' AND created_by = '%{control:Tmp-Tenant-ID}' LIMIT 1}"
+				Reply-Message := "%{sql:SELECT IF(is_override = 1 AND override_upload IS NOT NULL AND override_download IS NOT NULL, 'Override plan active', 'Package plan active') FROM customers WHERE username = '%{User-Name}' AND created_by = '%{control:Tmp-Tenant-ID}' LIMIT 1}"
+			}
 
+			# 5. Expiry check
+			if ("%{sql:SELECT IF((expiry < NOW() AND (extension_expiry IS NULL OR extension_expiry < NOW())), 1, 0) FROM customers WHERE username = '%{User-Name}' AND created_by = '%{control:Tmp-Tenant-ID}' LIMIT 1}" == "1") {
+			
+				if ("%{tolower:%{control:Tmp-Service}}" == "pppoe") {
+					update control {
+						Tmp-Group-Name := "Expired_Plan"
+						Expired-Pool := "EXPIRED_POOL"
+					}
+					update reply {
+						Reply-Message := "Account expired. Expired plan applied."
+						Framed-Pool := "%{control:Expired-Pool}"
+					}
+					accept
+				}
+			
+				update reply {
+					Reply-Message := "Your account has expired. Please renew."
+				}
+				reject
+			}
 
-	    # 9. MAC Lock
-	    if ("%{sql:SELECT maclock FROM customers WHERE username='%{User-Name}'}" == 1) {
-	        if ("%{sql:SELECT IF(mac_address IS NULL OR mac_address = '', 1, 0) FROM customers WHERE username='%{User-Name}'}" == 1) {
-	            update control {
-	                Tmp-String-0 := "%{sql:UPDATE customers SET mac_address='%{Calling-Station-Id}' WHERE username='%{User-Name}' AND (mac_address IS NULL OR mac_address = '')}"
-	            }
-	        }
-	
-	        if ("%{sql:SELECT IFNULL(FIND_IN_SET('%{Calling-Station-Id}', mac_address), 0) FROM customers WHERE username='%{User-Name}'}" <= 0) {
-	            if ("%{tolower:%{control:Tmp-Service}}" == "pppoe") {
-	                update control {
-	                    Tmp-Group-Name := "Disabled_plan"
-	                }
-	                update reply {
-	                    Reply-Message := "MAC mismatch. Added to Disabled Pool."
-	                }
-	                accept
-	            }
-	
-	            update reply {
-	                Reply-Message := "MAC mismatch. Please use your registered device."
-	            }
-	            reject
-	        }
-	    }
+			# 6. Tenant customer limit check
+			if ("&control:Tmp-Max-Customers" != "-1") {
+				update control {
+						Tmp-Online := "%{sql:SELECT COUNT(*) FROM radacct WHERE created_by = '%{control:Tmp-Tenant-ID}' AND acctstoptime IS NULL}"
+				}
 
-    		logintime
-    		#checkval
-    		expiration
-    		#accessperiod
-    		#Max-All-Session
+				if ("%{control:Tmp-Online}" >= "%{control:Tmp-Max-Customers}") {
+						if ("%{tolower:%{control:Tmp-Service}}" == "pppoe") {
+							update control {
+								Tmp-Group-Name := "Disabled_plan"
+								Disabled-Pool := "DISABLED_POOL"
+						}
+						update reply {
+							Reply-Message := "Customer limit reached. Added to Disabled Pool."
+							Framed-Pool := "%{control:Disabled-Pool}"
+						}
+						accept
+					}
+
+					update reply {
+						Reply-Message := "Your ISP customer limit has been reached. Please try later."
+					}
+					reject
+				}
+			}
+
+			## Add Unknown Users to Disabled Pool
+			if ("%{sql:SELECT COUNT(*) FROM customers c INNER JOIN nas n ON c.created_by = n.created_by WHERE c.username='%{User-Name}' AND n.nasname='%{NAS-IP-Address}'}" > 0) {
+				# User exists and belongs to the same created_by as the NAS
+				ok
+			} else {
+				update control {
+					Disabled-Pool := "DISABLED_POOL"
+					Tmp-String-0 := "%{sql:INSERT INTO radusergroup (username, groupname, priority, created_by) VALUES ('%{User-Name}', 'Disabled_Plan', 1, '%{control:Tmp-Tenant-ID}')}"
+				}
+				if (&control:Disabled-Pool && &control:Disabled-Pool != "") {
+					ok
+					update reply {
+						Reply-Message := "User Not Found - assigned to Disabled Pool - %{control:Disabled-Pool}"
+						Framed-Pool := "%{control:Disabled-Pool}"
+					}
+				} else { 
+					update reply {
+						Reply-Message := "Disabled Pool Not Found"
+					}
+					reject
+				}
+			}
+
+			# Check if mac_lock is enabled for this user
+			if ("%{sql:SELECT IF(maclock = 1, 1, 0) as maclock_status FROM customers WHERE username='%{User-Name}' AND created_by = '%{control:Tmp-Tenant-ID}'}" == 1) {
+				update control {
+					Disabled-Pool := "DISABLED_POOL"
+				}
+				# Check if the mac_address is empty or NULL. If yes, insert Calling-Station-Id into mac_address
+				if ("%{sql:SELECT IF(mac_address IS NULL OR mac_address = '', 1, 0) as mac_address_status FROM customers WHERE username='%{User-Name}' AND created_by = '%{control:Tmp-Tenant-ID}'}" == 1) {
+					update control {
+						Tmp-String-0 := "%{sql:UPDATE customers SET mac_address='%{Calling-Station-Id}' WHERE username='%{User-Name}' AND (mac_address IS NULL OR mac_address = '')}"
+					}
+				}
+				
+				# Check if the Calling-Station-Id matches any of the mac addresses
+				if ("%{sql:SELECT IFNULL(FIND_IN_SET('%{Calling-Station-Id}', mac_address), 0) as is_found_status FROM customers WHERE username='%{User-Name}' AND created_by = '%{control:Tmp-Tenant-ID}'}" <= 0) {
+					update reply {
+						Reply-Message := 'Wrong Mac Address. Added '
+						Framed-Pool := "%{control:Disabled-Pool}"
+					}
+					reject
+				}
+			}
+
+			## Check Token User
+			if("%{sql:SELECT COUNT(*) as token_found FROM token WHERE username='%{User-Name}'}" == 1){
+		
+				## query nas allow
+				if("%{sql:SELECT allowanynas FROM settings WHERE id=1}" == 0){
+					if("%{sql:SELECT nas.nasname FROM nas INNER JOIN token ON nas.id = token.nas_id WHERE token.username='%{User-Name}' AND token.nas_id != 0}" != "%{NAS-IP-Address}"){
+						update reply {
+							Reply-Message := 'NAS Not Allowed'
+						}
+						reject
+					}        
+				}
+		
+				update reply {
+					Reply-Message := 'Token User Found'
+				}
+		
+				## query user data check
+				if("%{sql:SELECT IF(packages.dataqt = 1 AND packages.dataqtvol > 0 AND packages.data_quota_exceed_status = 1 AND packages.data_quota_exceed_type = 1 AND token.used_data_vol >= packages.dataqtvol, 1, 0) as qt_vol_con_status FROM token LEFT JOIN packages ON token.package_id = packages.id WHERE token.username='%{User-Name}'}" == 1){
+					update reply {
+						Reply-Message := 'Token Reached Data Volume'
+					}
+					reject
+				}
+		
+				## Check Session Limit
+				if("%{sql:SELECT IF(packages.sessionqt = 1 AND packages.sessiontime > 0 AND packages.session_quota_exceed_status = 1 AND packages.session_quota_exceed_type = 1 AND token.used_session_vol >= packages.sessiontime, 1, 0) as qt_session_con_status FROM token LEFT JOIN packages ON token.package_id = packages.id WHERE token.username='%{User-Name}'}" == 1){
+					update reply {
+						Reply-Message := 'Token Reached Session Limit'
+					}
+					reject
+				}
+			}
+		}
 	}
-
 
 	authenticate {
 		Auth-Type PAP {
@@ -216,13 +282,12 @@ server default {
 		}
 		mschap
 		digest
-
 		eap
 	}
 
-
 	preacct {
 		preprocess
+
 		acct_unique
 		suffix
 		files
@@ -233,40 +298,16 @@ server default {
 		sql
 		exec
 		attr_filter.accounting_response
-		# CHECK OVER QUOTA USAGE
-		update control {
-			# Used QUOTA Value
-			Tmp-Integer-0 := "%{sql:SELECT (SUM(acctinputoctets)+SUM(acctoutputoctets)) AS Total FROM radacct where acctstarttime >= CURDATE() AND radacct.username='%{User-Name}'}"
-			# Value of FUP Bandwidth limit that is 512k, It is stored in a separate table
-			Tmp-String-5 := "%{sql: SELECT value FROM fup WHERE attribute='Mikrotik-Rate-Limit' AND username='%{User-Name}'}"
-			#Value of Actual QUOTA Allowed
-			Tmp-String-1 := "%{sql:  SELECT value FROM radcheck WHERE attribute='Mikrotik-Total-Limit' AND username='%{User-Name}'}"
-			Tmp-String-3 := "%{sql:select calledstationid from radacct where acctsessionid='%{Acct-Session-Id}'}"
-		}
-
-		if ("%{control:Tmp-Integer-0}" > "%{control:Tmp-String-1}"){
-			# Update COA to Mikrotik
-			update coa {
-				User-Name = "%{User-Name}"
-				Acct-Session-Id = "%{Acct-Session-Id}"
-				NAS-IP-Address = "%{NAS-IP-Address}"
-				Framed-IP-Address = "%{Framed-IP-Address}"
-				Mikrotik-Rate-Limit = "%{control:Tmp-String-5}"
-			}
-		}
 	}
 
-
 	session {
+	#	radutmp
+
+		#  See "Simultaneous Use Checking Queries" in mods-available/sql
 		sql
 	}
 
 	post-auth {
-		if (&control:Tmp-Group-Name) {
-		        update {
-		            Tmp-DB-Update := "%{sql:INSERT INTO radusergroup (username, groupname, priority, created_by) VALUES ('%{User-Name}', '%{control:Tmp-Group-Name}', 1, '%{control:Tmp-Tenant-ID}') ON DUPLICATE KEY UPDATE groupname = VALUES(groupname)}"
-		        }
-		}
 
 		if (&control:Expired-Pool && &control:Expired-Pool != "") {
 			# If Expired-Pool is set and is not empty, remove Framed-IP-Address and Framed-IP-Netmask
@@ -303,26 +344,20 @@ server default {
 		remove_reply_message_if_eap
 
 		Post-Auth-Type REJECT {
-		        if ("%{tolower:%{control:Tmp-Service}}" == "pppoe") {
-		            update control {
-		                Auth-Type := Accept
-		                Tmp-Group-Name := "Disabled_plan"
-		            }
-		            update reply {
-		                Reply-Message := "Invalid credentials. Added to Disabled Pool."
-		            }
-		            accept
-		        }
-		
-		        update reply {
-		            Reply-Message := "Login failed. Please try again or pay."
-		        }
-		        reject
+			sql
+			attr_filter.access_reject
+			eap
+			remove_reply_message_if_eap
 		}
 		Post-Auth-Type Challenge {
+			# remove_reply_message_if_eap
+			# attr_filter.access_challenge.post-auth
 		}
 
 		Post-Auth-Type Client-Lost {
+			# %{debug_attr:&session-state:TLS-Session-Information[*]}
+			# %{debug_attr:&session-state:TLS-Session-Information[n]}
+			# %{debug_attr:&session-state:Module-Failure-Message}
 		}
 
 		if (EAP-Key-Name && &reply:EAP-Session-Id) {
@@ -336,6 +371,6 @@ server default {
 	}
 
 	post-proxy {
-
+		eap
 	}
 }
